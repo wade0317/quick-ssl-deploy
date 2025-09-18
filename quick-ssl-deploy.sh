@@ -851,6 +851,13 @@ EOF
     # 等待Nginx完全启动
     sleep 2
 
+    # 检查与Let's Encrypt的连接
+    print_message "$YELLOW" "检查与Let's Encrypt服务器的连接..."
+    if ! curl -m 10 -s -o /dev/null -w "%{http_code}" https://acme-v02.api.letsencrypt.org/directory | grep -q "200"; then
+        print_message "$YELLOW" "警告: 无法连接到Let's Encrypt服务器，可能是网络问题"
+        echo "正在尝试继续..."
+    fi
+
     # 使用acme_tiny获取证书
     print_message "$YELLOW" "申请SSL证书..."
     print_message "$YELLOW" "请确保域名已正确解析到本服务器IP: $PUBLIC_IP"
@@ -863,21 +870,32 @@ EOF
     fi
 
     # 申请证书，设置更长的超时时间
-    if ! timeout 120 $python_command cert-tool.py --account-key ./account.key --csr ./domain.csr --acme-dir $cert_dir/challenges > ./signed.crt 2>cert_error.log; then
+    if ! timeout 300 $python_command cert-tool.py --account-key ./account.key --csr ./domain.csr --acme-dir $cert_dir/challenges > ./signed.crt 2>cert_error.log; then
         print_message "$RED" "证书申请失败！"
         echo ""
-        print_message "$YELLOW" "请检查以下事项："
-        echo "1. 域名 $web_domains 是否已正确解析到 $PUBLIC_IP"
-        echo "2. 防火墙是否开放了80端口"
-        echo "3. 云服务器安全组是否开放了80端口"
+        # 检查是否是超时错误
+        if grep -q "timed out" cert_error.log; then
+            print_message "$YELLOW" "连接到Let's Encrypt服务器超时，可能的原因："
+            echo "1. 网络连接问题，请检查服务器是否能访问外网"
+            echo "2. Let's Encrypt服务器暂时不可用，请稍后再试"
+            echo ""
+            echo "您可以尝试："
+            echo "  curl -I https://acme-v02.api.letsencrypt.org"
+            echo ""
+        else
+            print_message "$YELLOW" "请检查以下事项："
+            echo "1. 域名 $web_domains 是否已正确解析到 $PUBLIC_IP"
+            echo "2. 防火墙是否开放了80端口"
+            echo "3. 云服务器安全组是否开放了80端口"
+            echo ""
+            echo "您可以通过以下命令测试验证路径："
+            echo "  mkdir -p $cert_dir/challenges"
+            echo "  echo 'test' > $cert_dir/challenges/test.txt"
+            echo "  curl http://$web_first_domain/.well-known/acme-challenge/test.txt"
+        fi
         echo ""
         echo "错误详情："
-        tail -n 10 cert_error.log
-        echo ""
-        echo "您可以通过以下命令测试验证路径："
-        echo "  mkdir -p $cert_dir/challenges"
-        echo "  echo 'test' > $cert_dir/challenges/test.txt"
-        echo "  curl http://$web_first_domain/.well-known/acme-challenge/test.txt"
+        tail -n 20 cert_error.log
         exiterr "证书申请失败"
     fi
 

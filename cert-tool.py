@@ -44,17 +44,22 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
         return out
 
     # helper function - make request and automatically parse json response
-    def _do_request(url, data=None, err_msg="Error", depth=0):
+    def _do_request(url, data=None, err_msg="Error", depth=0, retry_count=0, max_retries=3):
         try:
             import socket
             # Set a default timeout for all socket operations
-            socket.setdefaulttimeout(30)
+            socket.setdefaulttimeout(60)
             resp = urlopen(Request(url, data=data, headers={
                 "Content-Type": "application/jose+json",
                 "User-Agent": "acme-tiny"
             }))
             resp_data, code, headers = resp.read().decode("utf8"), resp.getcode(), resp.headers
         except IOError as e:
+            # Handle timeout errors with retry
+            if "timed out" in str(e).lower() and retry_count < max_retries:
+                log.info("Request timed out, retrying... (attempt {0}/{1})".format(retry_count + 1, max_retries))
+                time.sleep(2 ** retry_count)  # exponential backoff
+                return _do_request(url, data, err_msg, depth, retry_count + 1, max_retries)
             resp_data = e.read().decode("utf8") if hasattr(e, "read") else str(e)
             code, headers = getattr(e, "code", None), {}
         try:
