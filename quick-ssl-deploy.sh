@@ -675,10 +675,65 @@ setup_https_website() {
         return
     fi
 
+    # 检查是否已存在相同域名的HTTP配置
+    web_first_domain=$(echo $web_domains | tr -s [:blank:] | cut -d ' ' -f 1)
+    existing_config=""
+
+    # 检查conf.d目录
+    if [[ -d "$nginx_config_dir/conf.d/" ]]; then
+        for domain in ${web_domains[@]}; do
+            if [[ -f "$nginx_config_dir/conf.d/${domain}.conf" ]]; then
+                existing_config="$nginx_config_dir/conf.d/${domain}.conf"
+                break
+            fi
+        done
+    fi
+
+    # 检查sites-available目录
+    if [[ -z "$existing_config" ]] && [[ -d "$nginx_config_dir/sites-available/" ]]; then
+        for domain in ${web_domains[@]}; do
+            if [[ -f "$nginx_config_dir/sites-available/${domain}.conf" ]] || [[ -f "$nginx_config_dir/sites-available/${domain}" ]]; then
+                existing_config=$(ls "$nginx_config_dir/sites-available/${domain}"* 2>/dev/null | head -1)
+                break
+            fi
+        done
+    fi
+
+    # 如果发现已存在HTTP配置，询问是否升级
+    if [[ -n "$existing_config" ]]; then
+        # 检查是否已经是HTTPS配置
+        if grep -q "listen 443" "$existing_config" 2>/dev/null; then
+            print_message "$YELLOW" "\n域名 $web_first_domain 已经配置了HTTPS"
+            read -p "是否覆盖现有配置？[y/N]: " override_choice
+            if [[ ! "$override_choice" =~ ^[Yy]$ ]]; then
+                return
+            fi
+        else
+            print_message "$YELLOW" "\n发现域名 $web_first_domain 已存在HTTP配置"
+            echo "1) 升级现有HTTP为HTTPS（推荐）"
+            echo "2) 创建新的HTTPS配置"
+            echo "3) 取消"
+            read -p "请选择 [1-3]: " upgrade_choice
+
+            case $upgrade_choice in
+                1)
+                    print_message "$GREEN" "正在升级现有HTTP站点为HTTPS..."
+                    upgrade_http_to_https
+                    return
+                    ;;
+                2)
+                    print_message "$YELLOW" "继续创建新的HTTPS配置..."
+                    ;;
+                *)
+                    return
+                    ;;
+            esac
+        fi
+    fi
+
     # 处理域名
     domain_length=0
     sign_domain_str=''
-    web_first_domain=$(echo $web_domains | tr -s [:blank:] | cut -d ' ' -f 1)
     nginx_web_config_file=$web_first_domain".conf"
 
     for web_domain in ${web_domains[@]}; do
@@ -775,17 +830,30 @@ setup_https_website() {
 server {
     listen 80;
     server_name $web_domains;
+    root $web_dir;
+    index index.html index.htm;
+
     location /.well-known/acme-challenge/ {
         alias $cert_dir/challenges/;
         try_files \$uri =404;
     }
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
 }
 EOF
 
+    # 重启Nginx并验证配置
+    nginx -t || exiterr "Nginx配置错误"
     service nginx restart || systemctl restart nginx
+
+    # 等待Nginx完全启动
+    sleep 2
 
     # 使用acme_tiny获取证书
     print_message "$YELLOW" "申请SSL证书..."
+    print_message "$YELLOW" "请确保域名已正确解析到本服务器IP: $PUBLIC_IP"
 
     # 检查本地证书工具
     if [[ -f "$SCRIPT_DIR/cert-tool.py" ]]; then
@@ -794,7 +862,24 @@ EOF
         download_file "${GITHUB_RAW_URL}/cert-tool.py" cert-tool.py || exiterr "无法下载证书工具"
     fi
 
-    $python_command cert-tool.py --account-key ./account.key --csr ./domain.csr --acme-dir $cert_dir/challenges > ./signed.crt || exiterr "证书申请失败，请检查域名解析是否正确"
+    # 申请证书，设置更长的超时时间
+    if ! timeout 120 $python_command cert-tool.py --account-key ./account.key --csr ./domain.csr --acme-dir $cert_dir/challenges > ./signed.crt 2>cert_error.log; then
+        print_message "$RED" "证书申请失败！"
+        echo ""
+        print_message "$YELLOW" "请检查以下事项："
+        echo "1. 域名 $web_domains 是否已正确解析到 $PUBLIC_IP"
+        echo "2. 防火墙是否开放了80端口"
+        echo "3. 云服务器安全组是否开放了80端口"
+        echo ""
+        echo "错误详情："
+        tail -n 10 cert_error.log
+        echo ""
+        echo "您可以通过以下命令测试验证路径："
+        echo "  mkdir -p $cert_dir/challenges"
+        echo "  echo 'test' > $cert_dir/challenges/test.txt"
+        echo "  curl http://$web_first_domain/.well-known/acme-challenge/test.txt"
+        exiterr "证书申请失败"
+    fi
 
     # 下载中间证书
     print_message "$YELLOW" "下载中间证书..."
@@ -1054,7 +1139,19 @@ upgrade_http_to_https() {
         download_file "${GITHUB_RAW_URL}/cert-tool.py" cert-tool.py || exiterr "无法下载证书工具"
     fi
 
-    $python_command cert-tool.py --account-key ./account.key --csr ./domain.csr --acme-dir $cert_dir/challenges > ./signed.crt || exiterr "证书申请失败"
+    # 申请证书，设置更长的超时时间
+    if ! timeout 120 $python_command cert-tool.py --account-key ./account.key --csr ./domain.csr --acme-dir $cert_dir/challenges > ./signed.crt 2>cert_error.log; then
+        print_message "$RED" "证书申请失败！"
+        echo ""
+        print_message "$YELLOW" "请检查以下事项："
+        echo "1. 域名 $web_domains 是否已正确解析到 $PUBLIC_IP"
+        echo "2. 防火墙是否开放了80端口"
+        echo "3. 云服务器安全组是否开放了80端口"
+        echo ""
+        echo "错误详情："
+        tail -n 10 cert_error.log
+        exiterr "证书申请失败"
+    fi
 
     download_file "https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem" intermediate.pem || exiterr "无法下载中间证书"
     cat signed.crt intermediate.pem > chained.pem
