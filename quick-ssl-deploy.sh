@@ -1169,6 +1169,13 @@ show_main_menu() {
 
         read -p "请选择 [1-5]: " choice
 
+        # 处理EOF情况（Ctrl+D）
+        if [ $? -ne 0 ]; then
+            echo ""
+            print_message "$GREEN" "感谢使用！"
+            exit 0
+        fi
+
         case $choice in
             1)
                 detect_os
@@ -1220,6 +1227,55 @@ show_main_menu() {
 # ========================================
 
 main() {
+    # 检查是否在交互式终端中运行
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        # 如果是通过管道运行，自动下载到临时文件并执行
+        print_message "$YELLOW" "检测到通过管道运行，正在切换到交互式模式..."
+
+        # 创建临时文件
+        TEMP_SCRIPT="/tmp/quick-ssl-deploy-$$.sh"
+
+        # 下载脚本到临时文件
+        if command -v curl >/dev/null 2>&1; then
+            curl -sSL -o "$TEMP_SCRIPT" "$GITHUB_RAW_URL/quick-ssl-deploy.sh"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$TEMP_SCRIPT" "$GITHUB_RAW_URL/quick-ssl-deploy.sh"
+        else
+            print_message "$RED" "错误: 需要curl或wget来下载脚本"
+            exit 1
+        fi
+
+        # 检查下载是否成功
+        if [ ! -f "$TEMP_SCRIPT" ] || [ ! -s "$TEMP_SCRIPT" ]; then
+            print_message "$RED" "错误: 脚本下载失败"
+            exit 1
+        fi
+
+        # 同时下载cert-tool.py到相同目录
+        TEMP_DIR=$(dirname "$TEMP_SCRIPT")
+        TEMP_CERT_TOOL="$TEMP_DIR/cert-tool.py"
+
+        if command -v curl >/dev/null 2>&1; then
+            curl -sSL -o "$TEMP_CERT_TOOL" "$GITHUB_RAW_URL/cert-tool.py"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$TEMP_CERT_TOOL" "$GITHUB_RAW_URL/cert-tool.py"
+        fi
+
+        # 设置执行权限
+        chmod +x "$TEMP_SCRIPT"
+        if [ -f "$TEMP_CERT_TOOL" ]; then
+            chmod +x "$TEMP_CERT_TOOL"
+        fi
+
+        # 以交互式方式执行脚本
+        cd "$TEMP_DIR"
+        exec bash "$TEMP_SCRIPT"
+
+        # 如果exec失败，清理并退出
+        rm -f "$TEMP_SCRIPT" "$TEMP_CERT_TOOL"
+        exit 1
+    fi
+
     # 检查是否以root权限运行
     if [ "$EUID" -ne 0 ]; then
         print_message "$RED" "请使用sudo或root权限运行此脚本"
