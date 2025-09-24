@@ -573,6 +573,7 @@ server {
     server_name $nginx_web_config_domain;
     root $web_dir;
     index index.html index.htm index.php;
+    charset utf-8;
 
     location / {
         try_files \$uri \$uri/ =404;
@@ -586,6 +587,7 @@ EOF
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Welcome</title>
 </head>
 <body>
@@ -832,6 +834,7 @@ server {
     server_name $web_domains;
     root $web_dir;
     index index.html index.htm;
+    charset utf-8;
 
     location /.well-known/acme-challenge/ {
         alias $cert_dir/challenges/;
@@ -917,6 +920,7 @@ server {
     server_name $web_domains;
     root $web_dir;
     index index.html index.htm index.php;
+    charset utf-8;
 
     ssl_certificate $cert_dir/chained.pem;
     ssl_certificate_key $cert_dir/domain.key;
@@ -942,6 +946,7 @@ EOF
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Welcome</title>
 </head>
 <body>
@@ -1187,6 +1192,7 @@ server {
     server_name $web_domains;
     root $web_dir;
     index index.html index.htm index.php;
+    charset utf-8;
 
     ssl_certificate $cert_dir/chained.pem;
     ssl_certificate_key $cert_dir/domain.key;
