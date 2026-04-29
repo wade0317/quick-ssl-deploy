@@ -1348,8 +1348,16 @@ show_main_menu() {
 # ========================================
 
 main() {
-    # 检查是否在交互式终端中运行
-    if [ ! -t 0 ] || [ ! -t 1 ]; then
+    # 检查是否通过管道运行（stdin 不是终端），且尚未重新执行过
+    if [ -z "$QUICK_SSL_DEPLOY_REEXEC" ] && [ ! -t 0 ]; then
+        # 必须能访问 /dev/tty 才能切换到交互式模式
+        if [ ! -e /dev/tty ] || ! { : >/dev/tty; } 2>/dev/null; then
+            print_message "$RED" "错误: 当前环境无可用终端 (/dev/tty)，无法以管道方式运行"
+            print_message "$YELLOW" "请先下载脚本再运行:"
+            print_message "$YELLOW" "  curl -sSLO $GITHUB_RAW_URL/quick-ssl-deploy.sh && sudo bash quick-ssl-deploy.sh"
+            exit 1
+        fi
+
         # 如果是通过管道运行，自动下载到临时文件并执行
         print_message "$YELLOW" "检测到通过管道运行，正在切换到交互式模式..."
 
@@ -1388,9 +1396,12 @@ main() {
             chmod +x "$TEMP_CERT_TOOL"
         fi
 
-        # 以交互式方式执行脚本
+        # 以交互式方式执行脚本：必须把 stdin 重定向到 /dev/tty，
+        # 否则子进程会继承管道的 stdin，再次触发管道检测导致死循环。
+        # 同时设置环境变量作为二次保险。
         cd "$TEMP_DIR"
-        exec bash "$TEMP_SCRIPT"
+        export QUICK_SSL_DEPLOY_REEXEC=1
+        exec bash "$TEMP_SCRIPT" </dev/tty
 
         # 如果exec失败，清理并退出
         rm -f "$TEMP_SCRIPT" "$TEMP_CERT_TOOL"
